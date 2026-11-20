@@ -1,302 +1,424 @@
 #!/usr/bin/env python3
-"""news-image-20261120 -- polished cyclone-wheel infographic, drawn from scratch.
+"""Draw the news-image-20261120 entry: 'THE WORLD IN ONE DAY'.
 
-One 1024x1024 image: five news stories of Friday 20 November 2026 arranged as
-saturated sectors of a cyclone wheel around a bold central medallion.
-PIL only, no external assets. Every number is taken from the brief.
+A five-sector cyclone wheel. Each wedge holds one big flat-illustration
+action scene (cyclone, protest crowd, handshake, batsman, children+globe)
+with a bold one-line headline, kicker and fact line over a dark scrim in
+the outer band. Header names the day; central medallion carries the 20.
+
+PIL only, no external assets, fully deterministic.
+Run:  python3 draw.py   ->  writes entry.png (1024x1024) next to this file.
 """
+
 import math
 import os
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, "entry.png")
 
 W = H = 1024
-BG = (10, 17, 32)
-GOLD = (255, 201, 60)
+CX, CY = 512, 608          # wheel centre
+R_OUT = 392                # wheel outer radius
+R_MED = 138                # medallion radius
+R_SCENE = 250              # scene band ends here; label band outside it
+R_INNER = 150              # scenes start just outside the medallion
+
+NAVY = (11, 18, 32)
+MEDALLION = (12, 27, 46)
+GOLD = (242, 183, 5)
+GOLD_SOFT = (255, 205, 80)
 WHITE = (255, 255, 255)
-SUB = (169, 184, 204)
-MED_FILL = (11, 42, 51)
-SWIRL = (143, 245, 230)
+INK = (11, 21, 38)
+SUBLINE = (165, 180, 205)
+PALE = (226, 234, 245)
 
-CX, CY = 512, 585          # wheel centre
-R_OUT = 395                # wheel outer radius
-R_MED = 130                # central medallion radius
+BOLD = "DejaVuSans-Bold.ttf"
+REG = "DejaVuSans.ttf"
 
-# (kicker, headline lines, body lines, sector fill, pictogram kind, layout)
-# layout: r_text = text-block centre radius; off = extra (dx, dy) shift of the
-# block; hcap/bcap/kcap = max pixel width for headline / body / kicker lines;
-# pic_r / pic_size / pic_dang = pictogram radius, size, angle offset from the
-# sector mid-angle. Side sectors are narrower, so their caps are tighter and
-# their pictograms smaller; bottom sectors sit 12px lower so their kickers
-# clear the medallion; bottom pictograms swing toward the sector edge so
-# they do not crowd the last body line.
+# sector: (mid angle deg, base colour, kicker, headline, fact)
 SECTORS = [
-    ("INDIA · WEATHER", ["AKVAN HITS", "ODISHA"],
-     ["Crosses coast near", "Gopalpur, noon — 100 km/h", "105,000+ evacuated."],
-     (0, 191, 165), "cyclone",
-     dict(r_text=245, off=(0, 0), hcap=235, bcap=230, kcap=240,
-          pic_r=360, pic_size=40, pic_dang=0)),
-    ("EUROPE · YOUTH", ["STUDENTS", "WALK OUT"],
-     ["Strikes in Europe + UK", "“Fight for our futures,", "not their wars.”"],
-     (255, 59, 48), "megaphone",
-     dict(r_text=245, off=(0, 0), hcap=195, bcap=190, kcap=190,
-          pic_r=368, pic_size=34, pic_dang=0)),
-    ("SHENZHEN · DIPLOMACY", ["ALBANESE", "MEETS XI"],
-     ["Australia's PM meets", "China's president —", "fifth meeting, APEC week."],
-     (255, 158, 0), "flags",
-     dict(r_text=255, off=(0, 0), hcap=235, bcap=200, kcap=200,
-          pic_r=360, pic_size=38, pic_dang=-16)),
-    ("WELLINGTON · CRICKET", ["NICHOLLS", "146*"],
-     ["NZ reach 317/6 on Day 2", "1st Test. Phillips 118", "in a record year v India."],
-     (0, 200, 83), "cricket",
-     dict(r_text=255, off=(0, 0), hcap=235, bcap=200, kcap=200,
-          pic_r=360, pic_size=38, pic_dang=18)),
-    ("EVERYWHERE · CHILDREN", ["WORLD", "CHILDREN'S DAY"],
-     ["20 November marks the UN", "day for children's rights", "1989 Convention adopted."],
-     (30, 144, 255), "balloon",
-     dict(r_text=245, off=(0, 0), hcap=195, bcap=190, kcap=190,
-          pic_r=368, pic_size=34, pic_dang=0)),
+    (-90, (18, 165, 148), "INDIA \u00b7 WEATHER", "AKVAN HITS ODISHA",
+     "100 km/h \u00b7 105,000+ evacuated"),
+    (-18, (229, 72, 77), "EUROPE \u00b7 YOUTH", "STUDENTS WALK OUT",
+     "Strikes across Europe + UK"),
+    (54, (245, 158, 11), "SHENZHEN \u00b7 DIPLOMACY", "ALBANESE MEETS XI",
+     "Fifth meeting, APEC week"),
+    (126, (34, 168, 92), "WELLINGTON \u00b7 CRICKET", "NICHOLLS 146*",
+     "NZ 317/6 \u00b7 Phillips 118"),
+    (198, (47, 128, 237), "EVERYWHERE \u00b7 CHILDREN", "WORLD CHILDREN'S DAY",
+     "UN day for children's rights \u00b7 1989"),
 ]
 
-# Vertical offsets of the text lines from the block centre.
-OFF_KICK = -72
-OFF_HEAD = (-34, 4)
-OFF_BODY = (38, 62, 86)
+
+def pol(r, deg):
+    """Point at radius r and screen-polar angle deg (0=east, clockwise)."""
+    a = math.radians(deg)
+    return (CX + r * math.cos(a), CY + r * math.sin(a))
 
 
-def font_path(bold):
-    cands = (["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-              "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"]
-             if bold else
-             ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-              "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"])
-    for p in cands:
-        if os.path.exists(p):
-            return p
-    return None
+def chord(r, half=36.0):
+    return 2.0 * r * math.sin(math.radians(half))
 
 
-BOLD_P = font_path(True)
-REG_P = font_path(False)
+def row_span(y_abs, mid):
+    """Horizontal span of the wedge at absolute y: (xmin, xmax) relative
+    to the wheel centre, for points inside the annulus and within
+    +/-33 deg of the sector mid-angle. Text rows are centred in this
+    span, so nothing can overflow the wedge or flip order."""
+    y = y_abs - CY
+    xs = []
+    x = -388
+    while x <= 388:
+        r = math.hypot(x, y)
+        if R_INNER <= r <= 388:
+            ang = math.degrees(math.atan2(y, x))
+            diff = (ang - mid + 180.0) % 360.0 - 180.0
+            if abs(diff) <= 33.0:
+                xs.append(x)
+        x += 2
+    if not xs:
+        return (-40, 40)
+    return (min(xs), max(xs))
 
 
-def F(size, bold=True):
-    p = BOLD_P if bold else REG_P
-    return ImageFont.truetype(p, size) if p else ImageFont.load_default()
+def font(name, size):
+    return ImageFont.truetype(name, int(size))
 
 
-def fit(text, size, bold, max_w, min_size=15):
-    """Largest font size (<= size) that fits text inside max_w pixels."""
-    while size > min_size and F(size, bold).getlength(text) > max_w:
+def fit(name, text, size, max_w):
+    """Largest font size (down to 14) whose text fits max_w."""
+    while size > 14:
+        f = font(name, size)
+        if f.getlength(text) <= max_w:
+            return f
         size -= 1
-    return F(size, bold)
+    return font(name, 14)
 
 
-def dark(color, f=0.35):
-    return tuple(int(v * f) for v in color)
+def disc(d, centre, r, fill, outline=None, width=1):
+    x, y = centre
+    d.ellipse([x - r, y - r, x + r, y + r], fill=fill,
+              outline=outline, width=width)
 
 
-def light(color, f=0.6):
-    """Mix a sector colour toward white (for pictogram halos)."""
-    return tuple(int(v + (255 - v) * f) for v in color)
+def line_p(d, r1, a1, r2, a2, fill, width):
+    d.line([pol(r1, a1), pol(r2, a2)], fill=fill, width=width)
 
 
-def spine(radius, mid_deg):
-    a = math.radians(mid_deg)
-    return (CX + radius * math.cos(a), CY + radius * math.sin(a))
+def arc_at(d, centre, r, start, end, fill, width):
+    x, y = centre
+    d.arc([x - r, y - r, x + r, y + r], start, end, fill=fill, width=width)
 
 
-def text_at(d, cx, cy, text, font, fill, stroke=None):
-    d.text((cx, cy), text, font=font, fill=fill, anchor="mm",
-           stroke_width=1 if stroke else 0, stroke_fill=stroke or fill)
+def arc_wheel(d, r, start, end, fill, width):
+    d.arc([CX - r, CY - r, CX + r, CY + r], start, end, fill=fill, width=width)
 
 
-# ---------------------------------------------------------------- pictograms
-# Each draws a simple geometric icon centred at (cx, cy) with size s,
-# in the given fill colour. All coordinates are fractions of s.
-
-def pic_cyclone(d, cx, cy, s, fill):
-    w = max(4, s // 9)
-    for r, a0, a1 in ((0.16, 20, 300), (0.30, 140, 420), (0.44, 260, 540)):
-        rr = r * s
-        d.arc([cx - rr, cy - rr, cx + rr, cy + rr], a0, a1, fill=fill, width=w)
-    r = 0.07 * s
-    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill)
-
-
-def pic_megaphone(d, cx, cy, s, fill):
-    cone = [(-0.38 * s, -0.15 * s), (0.26 * s, -0.37 * s),
-            (0.26 * s, 0.37 * s), (-0.38 * s, 0.15 * s)]
-    d.polygon([(cx + x, cy + y) for x, y in cone], fill=fill)
-    d.rectangle([cx - 0.30 * s, cy + 0.15 * s, cx - 0.15 * s, cy + 0.46 * s],
-                fill=fill)
-    for rr in (0.13, 0.23, 0.33):
-        r = rr * s
-        d.arc([cx + 0.30 * s - r, cy - r, cx + 0.30 * s + r, cy + r],
-              -55, 55, fill=fill, width=max(3, s // 14))
-
-
-def pic_flags(d, cx, cy, s, fill):
-    w = max(4, s // 11)
-    for px in (-0.26 * s, 0.26 * s):
-        d.line([cx + px, cy - 0.44 * s, cx + px, cy + 0.48 * s],
-               fill=fill, width=w)
-        r = 0.05 * s
-        d.ellipse([cx + px - r, cy - 0.50 * s, cx + px + r, cy - 0.40 * s],
-                  fill=fill)
-    d.polygon([(cx - 0.26 * s, cy - 0.44 * s), (cx - 0.26 * s, cy - 0.16 * s),
-               (cx - 0.52 * s, cy - 0.30 * s)], fill=fill)
-    d.polygon([(cx + 0.26 * s, cy - 0.44 * s), (cx + 0.26 * s, cy - 0.16 * s),
-               (cx + 0.52 * s, cy - 0.30 * s)], fill=fill)
-
-
-def pic_cricket(d, cx, cy, s, fill):
-    # Bat: a rectangle rotated -40 degrees around its centre.
-    bx, by = cx - 0.10 * s, cy + 0.10 * s
-    lw, ll = 0.20 * s, 0.72 * s
-    ang = math.radians(-40)
-    ca, sa = math.cos(ang), math.sin(ang)
+def star_points(cx, cy, r_out, r_in, n=5, rot=-90):
     pts = []
-    for dx, dy in ((-lw / 2, -ll / 2), (lw / 2, -ll / 2),
-                   (lw / 2, ll / 2), (-lw / 2, ll / 2)):
-        pts.append((bx + dx * ca - dy * sa, by + dx * sa + dy * ca))
-    d.polygon(pts, fill=fill)
-    ballx, bally, br = cx + 0.30 * s, cy - 0.28 * s, 0.17 * s
-    d.ellipse([ballx - br, bally - br, ballx + br, bally + br], fill=fill)
-    d.arc([ballx - br * 0.6, bally - br, ballx + br * 0.6, bally + br],
-          -60, 60, fill=BG, width=2)
+    for i in range(2 * n):
+        r = r_out if i % 2 == 0 else r_in
+        a = math.radians(rot + i * 180.0 / n)
+        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    return pts
 
 
-def pic_balloon(d, cx, cy, s, fill):
-    bx, by = cx - 0.02 * s, cy - 0.28 * s
-    rx, ry = 0.26 * s, 0.31 * s
-    d.ellipse([bx - rx, by - ry, bx + rx, by + ry], fill=fill)
-    d.polygon([(cx - 0.08 * s, cy + 0.02 * s), (cx + 0.04 * s, cy + 0.02 * s),
-               (cx - 0.02 * s, cy + 0.10 * s)], fill=fill)
-    pts = [(cx - 0.02 * s, cy + 0.10 * s), (cx + 0.06 * s, cy + 0.22 * s),
-           (cx - 0.06 * s, cy + 0.34 * s), (cx + 0.02 * s, cy + 0.46 * s)]
-    d.line(pts, fill=fill, width=max(3, s // 16), joint="curve")
+def rrect_points(cx, cy, w, h, angle_deg):
+    a = math.radians(angle_deg)
+    ca, sa = math.cos(a), math.sin(a)
+    pts = []
+    for dx, dy in ((-w / 2, -h / 2), (w / 2, -h / 2),
+                   (w / 2, h / 2), (-w / 2, h / 2)):
+        pts.append((cx + dx * ca - dy * sa, cy + dx * sa + dy * ca))
+    return pts
 
 
-PICS = {"cyclone": pic_cyclone, "megaphone": pic_megaphone,
-        "flags": pic_flags, "cricket": pic_cricket, "balloon": pic_balloon}
+# ---------------------------------------------------------------- scenes
+# Each scene draws on its own layer, in wheel polar coordinates, inside
+# one wedge (mid angle). The layer is clipped to the wedge afterwards.
+
+def scene_cyclone(d, mid):
+    """Huge spiral, rain streaks, waves on a coastline."""
+    s = pol(215, mid)
+    # spiral arms around the eye
+    for rr, start, col, wd in (
+            (26, 15, WHITE, 12), (50, 140, (127, 231, 216), 12),
+            (74, 255, WHITE, 11), (92, 30, (127, 231, 216), 10)):
+        arc_at(d, s, rr, start, start + 295, col, wd)
+    disc(d, s, 15, WHITE)
+    disc(d, s, 6, (11, 110, 99))
+    # rain: diagonal white streaks across the outer scene band
+    for k in range(7):
+        a = mid - 30 + k * 10
+        line_p(d, 292, a, 258, a - 7, (220, 250, 248), 5)
+    # waves hugging the inner edge (wheel-centred arcs)
+    arc_wheel(d, 172, mid - 33, mid + 33, WHITE, 8)
+    arc_wheel(d, 192, mid - 33, mid + 33, (127, 231, 216), 7)
+    # wind swirls at the wedge sides
+    arc_at(d, pol(205, mid - 27), 17, 200, 140, WHITE, 6)
+    arc_at(d, pol(205, mid + 27), 17, 20, 320, WHITE, 6)
+    # one arm spills up toward the label band
+    arc_at(d, s, 118, 300, 355, (127, 231, 216), 10)
 
 
-def check_layout(items):
-    """Numeric self-check: every text line and pictogram must sit inside the
-    wheel, clear of the medallion, and clear of the other pictograms."""
-    problems = []
-    for label, (x0, y0, x1, y1) in items:
-        for cx, cy in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
-            if math.hypot(cx - CX, cy - CY) > R_OUT - 1:
-                problems.append(f"{label!r} corner ({cx:.0f},{cy:.0f}) "
-                                f"outside wheel")
-        # Distance from medallion centre to the closest point of the box.
-        nx = min(max(CX, x0), x1)
-        ny = min(max(CY, y0), y1)
-        if math.hypot(nx - CX, ny - CY) < R_MED + 2:
-            problems.append(f"{label!r} touches medallion")
-    pics = [(l, b) for l, b in items if l.endswith("-pic")]
-    texts = [(l, b) for l, b in items if not l.endswith("-pic")]
-    for pl, (px0, py0, px1, py1) in pics:
-        for tl, (tx0, ty0, tx1, ty1) in texts:
-            if px0 < tx1 - 1 and tx0 < px1 - 1 and py0 < ty1 - 1 and ty0 < py1 - 1:
-                problems.append(f"{pl} overlaps text {tl!r}")
-    if problems:
-        print("LAYOUT CHECK: %d problem(s)" % len(problems))
-        for p in problems:
-            print("  -", p)
-    else:
-        print("LAYOUT CHECK: clean (%d items)" % len(items))
+def scene_crowd(d, mid):
+    """Raised fists, placards and a megaphone on diagonal lines."""
+    # crowd mass along the inner edge
+    arc_wheel(d, 178, mid - 34, mid + 34, (20, 27, 46), 34)
+    for k in range(5):
+        a = mid - 27 + k * 13.5
+        disc(d, pol(192, a), 14, (20, 27, 46))
+    # raised fists: thick navy arms ending in fists, kept to the wedge
+    # edges so they never cross the label rows in the middle
+    for k in (-1, 1):
+        a = mid + k * 26
+        line_p(d, 200, a, 240, a + 3, (20, 27, 46), 18)
+        disc(d, pol(248, a + 3), 18, (20, 27, 46), outline=WHITE, width=3)
+    # placards: two upright cream boards at the wedge edges, each with
+    # one bold mark (kept near-upright so they read as signs)
+    marks = ("!", "star")
+    for k, mark in enumerate(marks):
+        a = mid + (-28 if k == 0 else 28)
+        px, py = pol(255, a)
+        d.line([(px, py + 30), pol(196, a)], fill=(20, 27, 46), width=7)
+        board = rrect_points(px, py, 88, 62, (k - 0.5) * 16)
+        d.polygon(board, fill=(255, 243, 214), outline=(20, 27, 46))
+        if mark == "!":
+            d.text((px, py - 2), "!", font=font(BOLD, 40),
+                   fill=(20, 27, 46), anchor="mm")
+        elif mark == "star":
+            d.polygon(star_points(px, py, 20, 8), fill=GOLD,
+                      outline=(20, 27, 46))
+        else:
+            bx, by = px, py
+            d.polygon([(bx + 4, by - 20), (bx - 12, by + 4), (bx - 1, by + 4),
+                       (bx - 5, by + 20), (bx + 12, by - 4), (bx + 1, by - 4)],
+                      fill=(20, 27, 46))
+    # megaphone at the lower side
+    mx, my = pol(232, mid + 27)
+    d.polygon([(mx - 34, my - 16), (mx + 28, my - 34), (mx + 28, my + 34),
+               (mx - 34, my + 16)], fill=WHITE, outline=(20, 27, 46))
+    d.line([(mx - 34, my - 16), (mx - 34, my + 16)], fill=(20, 27, 46),
+           width=6)
+    # motion lines
+    for k in range(3):
+        a = mid - 30 + k * 8
+        line_p(d, 292, a, 272, a - 4, (255, 217, 217), 5)
 
 
-# ------------------------------------------------------------------- build
+def scene_handshake(d, mid):
+    """Two flags behind two figures shaking hands; gold sun behind."""
+    # flag fields split down the wedge middle
+    d.pieslice([CX - 300, CY - 300, CX + 300, CY + 300],
+               mid - 34.5, mid, fill=(30, 79, 163))
+    d.pieslice([CX - 300, CY - 300, CX + 300, CY + 300],
+               mid, mid + 34.5, fill=(208, 52, 44))
+    # Southern Cross stars on the blue half
+    for rr, aa, sr in ((255, mid - 24, 7), (228, mid - 12, 5),
+                       (262, mid - 10, 6), (240, mid - 27, 5),
+                       (205, mid - 20, 4)):
+        x, y = pol(rr, aa)
+        d.polygon(star_points(x, y, sr, sr * 0.45), fill=WHITE)
+    # big + small gold stars on the red half
+    x, y = pol(245, mid + 17)
+    d.polygon(star_points(x, y, 20, 8), fill=GOLD)
+    for rr, aa in ((272, mid + 26), (218, mid + 27), (258, mid + 8)):
+        x, y = pol(rr, aa)
+        d.polygon(star_points(x, y, 8, 3.5), fill=GOLD)
+    # gold sun behind the handshake
+    disc(d, pol(210, mid), 48, GOLD)
+    # two figures: crisp head-and-shoulder silhouettes, arms reaching
+    # to the centre where the hands meet
+    for side in (-1, 1):
+        hx, hy = pol(258, mid + side * 15)
+        disc(d, (hx, hy), 16, (20, 32, 46), outline=WHITE, width=3)
+        shx, shy = pol(228, mid + side * 17)
+        wax, way = pol(198, mid + side * 10)
+        mx, my = (shx + wax) / 2.0, (shy + way) / 2.0
+        ang = math.degrees(math.atan2(way - shy, wax - shx))
+        d.polygon(rrect_points(mx, my, 46, 62, ang),
+                  fill=(20, 32, 46), outline=WHITE)
+        hx2, hy2 = pol(232, mid + side * 16)
+        gx, gy = pol(214, mid)
+        d.line([(hx2, hy2), (gx, gy)], fill=(20, 32, 46), width=14)
+    # handshake burst at the meeting point
+    bx, by = pol(214, mid)
+    d.polygon(star_points(bx, by, 26, 11, n=8), fill=WHITE,
+              outline=GOLD)
+    disc(d, (bx, by), 8, GOLD)
 
-def build():
-    img = Image.new("RGB", (W, H), BG)
+
+def scene_cricket(d, mid):
+    """Batsman mid-swing on a diagonal pitch, ball flying, stumps."""
+    # pitch strip, diagonal across the wedge
+    line_p(d, 168, mid - 28, 296, mid + 22, (239, 227, 194), 36)
+    d.line([pol(168, mid - 28), pol(296, mid + 22)], fill=(255, 255, 255),
+           width=3)
+    # stumps at the lower end of the pitch
+    for k in (-1, 0, 1):
+        a = mid - 24 + k * 4
+        line_p(d, 196, a, 214, a, GOLD, 8)
+    line_p(d, 214, mid - 28, 214, mid - 20, GOLD, 5)
+    # starburst + ball flying to the upper corner, clear of the labels
+    bx, by = pol(350, mid - 33)
+    d.polygon(star_points(bx, by, 34, 13, n=8), fill=WHITE)
+    disc(d, (bx, by), 15, (200, 40, 40), outline=WHITE, width=3)
+    arc_at(d, (bx, by), 9, 200, 340, WHITE, 2)
+    for k in range(3):
+        a = mid - 28 - k * 3
+        line_p(d, 325 - k * 12, a, 310 - k * 12, a - 2, WHITE, 4)
+    # batsman, scaled up: white kit, green helmet, mid-swing
+    hx, hy = pol(238, mid + 4)
+    disc(d, (hx, hy), 18, (245, 239, 224), outline=(20, 32, 46), width=3)
+    arc_at(d, (hx, hy), 18, 180, 360, (34, 168, 92), 8)
+    wx, wy = pol(196, mid + 8)
+    sx, sy = pol(226, mid + 5)
+    d.polygon([(sx - 24, sy - 16), (sx + 24, sy - 16), (wx + 16, wy + 14),
+               (wx - 16, wy + 14)], fill=(245, 239, 224),
+              outline=(20, 32, 46))
+    d.line([(wx, wy), pol(162, mid - 2)], fill=(245, 239, 224), width=15)
+    d.line([(wx, wy), pol(166, mid + 18)], fill=(245, 239, 224), width=15)
+    # arms + bat sweeping up-outward
+    ax, ay = pol(232, mid + 2)
+    gx, gy = pol(266, mid - 8)
+    d.line([(ax, ay), (gx, gy)], fill=(245, 239, 224), width=14)
+    d.line([(gx, gy), pol(285, mid - 20)], fill=(247, 239, 216), width=20)
+    d.line([(gx, gy), pol(285, mid - 20)], fill=(20, 32, 46), width=2)
+
+
+def scene_children(d, mid):
+    """Globe with land, joyful children, balloons and sparkles."""
+    gx, gy = pol(230, mid)
+    disc(d, (gx, gy), 80, (94, 168, 232), outline=WHITE, width=4)
+    # land blobs kept inside the globe
+    d.ellipse([gx - 58, gy - 52, gx - 10, gy - 8], fill=(63, 163, 77))
+    d.ellipse([gx + 4, gy + 10, gx + 56, gy + 54], fill=(63, 163, 77))
+    d.ellipse([gx + 20, gy - 54, gx + 58, gy - 20], fill=(63, 163, 77))
+    arc_at(d, (gx, gy), 44, 200, 340, WHITE, 3)
+    arc_at(d, (gx, gy), 64, 20, 160, WHITE, 3)
+    # two children with raised arms, flanking the globe
+    for side, col in ((-1, (255, 210, 63)), (1, (255, 107, 157))):
+        hx, hy = pol(246, mid + side * 25)
+        disc(d, (hx, hy), 17, (242, 196, 155), outline=(20, 32, 46),
+             width=2)
+        bx, by = pol(210, mid + side * 25)
+        d.polygon([(bx - 22, by - 14), (bx + 22, by - 14), (bx + 14, by + 26),
+                   (bx - 14, by + 26)], fill=col, outline=(20, 32, 46))
+        ax, ay = pol(220, mid + side * 25)
+        d.line([(ax, ay), pol(258, mid + side * 31)], fill=col, width=10)
+        d.line([(ax, ay), pol(258, mid + side * 19)], fill=col, width=10)
+    # balloons rising at the sides
+    for rr, aa, col in ((292, mid - 28, (229, 72, 77)),
+                        (300, mid + 4, (255, 210, 63)),
+                        (290, mid + 28, (255, 107, 157))):
+        bx, by = pol(rr, aa)
+        d.line([(bx, by + 20), pol(rr - 42, aa)], fill=WHITE, width=3)
+        disc(d, (bx, by), 22, col, outline=WHITE, width=3)
+        d.polygon([(bx - 7, by + 20), (bx + 7, by + 20), (bx, by + 30)],
+                  fill=col)
+    # sparkles
+    for rr, aa in ((168, mid - 30), (172, mid + 30), (268, mid - 14)):
+        x, y = pol(rr, aa)
+        d.polygon(star_points(x, y, 11, 4, n=4), fill=GOLD_SOFT)
+
+
+SCENES = {
+    -90: scene_cyclone,
+    -18: scene_crowd,
+    54: scene_handshake,
+    126: scene_cricket,
+    198: scene_children,
+}
+
+
+def wedge_mask(mid):
+    """White annular sector (r 150..390, mid +/-34.5 deg) on black."""
+    m = Image.new("L", (W, H), 0)
+    md = ImageDraw.Draw(m)
+    md.pieslice([CX - 390, CY - 390, CX + 390, CY + 390],
+                mid - 34.5, mid + 34.5, fill=255)
+    md.ellipse([CX - R_INNER, CY - R_INNER, CX + R_INNER, CY + R_INNER],
+               fill=0)
+    return m
+
+
+def main():
+    img = Image.new("RGB", (W, H), NAVY)
     d = ImageDraw.Draw(img)
 
-    # Header.
-    text_at(d, 512, 40, "THE WORLD IN ONE DAY", F(38, True), GOLD)
-    text_at(d, 512, 92, "FRIDAY 20 NOVEMBER 2026", F(60, True), WHITE)
-    text_at(d, 512, 148,
-            "Five stories that defined the day  ·  Sources: IMD · Reuters · ICC · UN",
-            F(23, False), SUB)
-    d.line([(60, 178), (964, 178)], fill=GOLD, width=3)
+    # ---- header
+    d.text((512, 52), "THE WORLD IN ONE DAY", font=font(BOLD, 52),
+           fill=GOLD, anchor="mm")
+    d.text((512, 108), "FRIDAY 20 NOVEMBER 2026", font=font(BOLD, 62),
+           fill=WHITE, anchor="mm")
+    d.text((512, 156),
+           "Five stories that defined the day  \u00b7  Sources: IMD \u00b7 Reuters \u00b7 ICC \u00b7 UN",
+           font=font(REG, 23), fill=SUBLINE, anchor="mm")
+    d.line([(60, 182), (964, 182)], fill=GOLD, width=3)
 
-    # Wheel sectors, clockwise from the top (mid angles -90, -18, 54, 126, 198).
-    bbox = [CX - R_OUT, CY - R_OUT, CX + R_OUT, CY + R_OUT]
-    items = []  # (label, (x0, y0, x1, y1)) for the layout self-check
-    for i, (kicker, head, body, fill, kind, lay) in enumerate(SECTORS):
-        mid = -90 + i * 72
-        d.pieslice(bbox, mid - 34.5, mid + 34.5, fill=fill)
-        # Deep dark swirl arcs, offset per radius so the wheel reads as turning.
-        # Kept thin so they texture the fill without striking through the text.
-        for radius, off in ((195, -9), (255, 0), (315, 9)):
-            b = [CX - radius, CY - radius, CX + radius, CY + radius]
-            d.arc(b, mid - 27 + off, mid + 27 + off, fill=dark(fill, 0.5),
-                  width=8)
-        # Gold speed ticks near the rim: two per sector, off the spine so
-        # they never touch the pictogram. Cheap motion energy at thumbnail.
-        for tang in (mid - 24, mid + 24):
-            a = math.radians(tang)
-            d.line([(CX + 362 * math.cos(a), CY + 362 * math.sin(a)),
-                    (CX + 388 * math.cos(a), CY + 388 * math.sin(a))],
-                   fill=GOLD, width=7)
-        # Pictogram: light halo, then dark drop-shadow, then white icon.
-        qx, qy = spine(lay["pic_r"], mid + lay["pic_dang"])
-        ps = lay["pic_size"]
-        halo = int(ps * 1.15)
-        PICS[kind](d, qx, qy, halo, light(fill, 0.65))
-        PICS[kind](d, qx + 2, qy + 3, ps, dark(fill, 0.55))
-        PICS[kind](d, qx, qy, ps, WHITE)
-        items.append((f"{kind}-pic", (qx - halo / 2, qy - halo / 2,
-                                      qx + halo / 2, qy + halo / 2)))
-        # Text block: stacked vertically on screen, centred on the spine.
-        # (Stacking along the spine would splay the lines sideways on the
-        # left/right sectors and flip their order on the bottom ones.)
-        px, py = spine(lay["r_text"], mid)
-        px += lay["off"][0]
-        py += lay["off"][1]
+    # ---- wheel base + scenes
+    for mid, colour, _k, _h, _f in SECTORS:
+        d.pieslice([CX - R_OUT, CY - R_OUT, CX + R_OUT, CY + R_OUT],
+                   mid - 34.5, mid + 34.5, fill=colour)
+    for mid, _c, _k, _h, _f in SECTORS:
+        layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ld = ImageDraw.Draw(layer)
+        SCENES[mid](ld, mid)
+        alpha = ImageChops.darker(layer.split()[3], wedge_mask(mid))
+        img.paste(layer, (0, 0), alpha)
 
-        def place(text, cy, font, fill_c, stroke=None):
-            w = font.getlength(text)
-            h = font.getbbox(text)[3] - font.getbbox(text)[1]
-            items.append((text, (px - w / 2, cy - h / 2,
-                                 px + w / 2, cy + h / 2)))
-            text_at(d, px, cy, text, font, fill_c, stroke=stroke)
+    # ---- dark scrim over the outer label band, then labels
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    for mid, _c, _k, _h, _f in SECTORS:
+        od.pieslice([CX - 390, CY - 390, CX + 390, CY + 390],
+                    mid - 34.5, mid + 34.5, fill=(10, 17, 34, 115))
+        od.pieslice([CX - R_SCENE, CY - R_SCENE, CX + R_SCENE, CY + R_SCENE],
+                    mid - 34.5, mid + 34.5, fill=(0, 0, 0, 0))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    d = ImageDraw.Draw(img)
 
-        # Kicker.
-        place(kicker, py + OFF_KICK, fit(kicker, 22, True, lay["kcap"]), GOLD)
-        # Headline, two big lines; the cricket score line gets gold.
-        for j, line in enumerate(head):
-            colour = GOLD if (kind == "cricket" and j == 1) else WHITE
-            place(line, py + OFF_HEAD[j], fit(line, 36, True, lay["hcap"]),
-                  colour, stroke=dark(fill, 0.5))
-        # Body, three short lines.
-        for j, line in enumerate(body):
-            place(line, py + OFF_BODY[j], fit(line, 20, False, lay["bcap"], 15),
-                  WHITE)
-    check_layout(items)
+    # labels: three horizontal rows per wedge, stacked top-to-bottom
+    # (kicker -> headline -> fact) around an anchor on the sector axis;
+    # each row is centred in the wedge's actual horizontal span at its
+    # own height, so side wedges cannot overflow and bottom wedges
+    # cannot flip reading order.
+    for mid, _c, kicker, headline, fact in SECTORS:
+        ax, ay = pol(318, mid)
+        for dy, text, size0, fill, name in (
+                (-38, kicker, 19, GOLD, BOLD),
+                (0, headline, 33, WHITE, BOLD),
+                (38, fact, 19, PALE, REG)):
+            y = ay + dy
+            x0, x1 = row_span(y, mid)
+            tx = CX + (x0 + x1) / 2.0
+            sw = 3 if name == BOLD and size0 > 20 else 2
+            d.text((tx, y), text,
+                   font=fit(name, text, size0, (x1 - x0) - 14),
+                   fill=fill, anchor="mm", stroke_width=sw,
+                   stroke_fill=INK)
 
-    # Gold frame ring around the wheel.
-    d.ellipse(bbox, outline=GOLD, width=3)
-
-    # Central medallion: bold swirl, giant 20, gold ring.
-    d.ellipse([CX - R_MED, CY - R_MED, CX + R_MED, CY + R_MED], fill=MED_FILL)
+    # ---- gold rim, boundary ticks, medallion
+    d.ellipse([CX - R_OUT, CY - R_OUT, CX + R_OUT, CY + R_OUT],
+              outline=GOLD, width=4)
+    for mid, _c, _k, _h, _f in SECTORS:
+        b = mid + 36
+        d.line([pol(R_OUT - 8, b), pol(R_OUT + 2, b)], fill=GOLD, width=4)
     d.ellipse([CX - R_MED, CY - R_MED, CX + R_MED, CY + R_MED],
-              outline=GOLD, width=7)
-    d.ellipse([CX - R_MED + 12, CY - R_MED + 12, CX + R_MED - 12, CY + R_MED - 12],
-              outline=(127, 231, 220), width=2)
-    pic_cyclone(d, 512, 498, 64, SWIRL)
-    text_at(d, 512, 592, "20", F(132, True), WHITE)
-    text_at(d, 512, 668, "NOV", F(34, True), GOLD)
-    text_at(d, 512, 694, "FIVE STORIES", F(20, True), WHITE)
+              fill=MEDALLION, outline=GOLD, width=6)
+    d.ellipse([CX - R_MED + 12, CY - R_MED + 12,
+               CX + R_MED - 12, CY + R_MED - 12],
+              outline=(242, 183, 5), width=2)
+    d.text((512, 578), "20", font=font(BOLD, 148), fill=WHITE, anchor="mm")
+    d.text((512, 666), "NOV", font=font(BOLD, 44), fill=GOLD, anchor="mm")
+    d.text((512, 704), "FIVE STORIES", font=font(BOLD, 20), fill=GOLD,
+           anchor="mm")
 
-    return img
+    img.save(OUT, "PNG")
+    print("wrote", OUT, img.size)
 
 
 if __name__ == "__main__":
-    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "entry.png")
-    build().save(out)
-    print("wrote", out)
+    main()
